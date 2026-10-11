@@ -30,4 +30,24 @@ RSpec.describe Acms::Client do
     client.leave_site("s1")
     expect(transport.requests.map { |r| [ r.method, r.path ] }).to eq([ [ :post, "/api/v1/invites/CODE/redeem" ], [ :delete, "/api/v1/sites/s1/membership" ] ])
   end
+
+  it "maps site export and delete endpoints" do
+    client.export_site("s1")
+    client.site_exports("s1")
+    client.site_export("s1", "e1")
+    client.delete_site("s1", confirm_export: "demo-20261011T120000Z")
+    expect(transport.requests.map { |r| [ r.method, r.path ] }).to eq([
+      [ :post, "/api/v1/sites/s1/exports" ], [ :get, "/api/v1/sites/s1/exports" ],
+      [ :get, "/api/v1/sites/s1/exports/e1" ], [ :delete, "/api/v1/sites/s1" ]
+    ])
+    expect(transport.requests.last.query).to eq(confirm_export: "demo-20261011T120000Z")
+  end
+
+  it "downloads a file across a redirect without the wallet header" do
+    transport = FakeTransport.new([ :get, "https://acm.test/blob" ] => [ 302, "", { "location" => [ "https://s3.test/f.zip" ] } ],
+                                  [ :get, "https://s3.test/f.zip" ] => [ 200, "PK\x03\x04" ])
+    client = described_class.new(wallet: Acms::Wallet.generate, transport: transport)
+    expect(client.download("https://acm.test/blob")).to eq("PK\x03\x04")
+    expect(transport.requests.map(&:headers)).to all(be_empty)
+  end
 end

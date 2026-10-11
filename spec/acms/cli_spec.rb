@@ -14,3 +14,61 @@ RSpec.describe Acms::CLI do
     expect(err.string).to include("private key")
   end
 end
+
+RSpec.describe Acms::CLI, "sites commands" do
+  let(:key) { Acms::Wallet.generate.private_key }
+  let(:out) { StringIO.new }
+  let(:err) { StringIO.new }
+  let(:export) { { "id" => "e1", "name" => "demo-20261011T120000Z", "status" => "completed", "byte_size" => 4, "download_url" => "https://acm.test/blob", "created_at" => "2026-10-11T12:00:00Z" } }
+  let(:transport) do
+    FakeTransport.new(
+      [ :post, "/api/v1/sites/s1/exports" ] => [ 201, { "export" => export.merge("status" => "pending", "download_url" => nil) } ],
+      [ :get, "/api/v1/sites/s1/exports/e1" ] => [ 200, { "export" => export } ],
+      [ :get, "/api/v1/sites/s1/exports" ] => [ 200, { "exports" => [ export, export.merge("name" => "demo-20261010T090000Z", "created_at" => "2026-10-10T09:00:00Z") ] } ],
+      [ :get, "/api/v1/sites/s1" ] => [ 200, { "site" => { "id" => "s1", "name" => "Demo", "slug" => "demo" } } ],
+      [ :delete, "/api/v1/sites/s1" ] => [ 200, { "deleted" => true, "id" => "s1", "slug" => "demo" } ],
+      [ :get, "https://acm.test/blob" ] => [ 200, "PK!!" ]
+    )
+  end
+
+  def run(*argv, input: "")
+    described_class.run([ *argv, "--key", key ], out: out, err: err, input: StringIO.new(input), transport: transport)
+  end
+
+  before { allow_any_instance_of(described_class).to receive(:sleep) }
+
+  it "exports, waits for completion and saves the file" do
+    path = File.join(Dir.mktmpdir, "demo.zip")
+    expect(run("sites:export", "s1", "-o", path)).to eq(0)
+    expect(out.string).to include("name=demo-20261011T120000Z", "download_url=https://acm.test/blob", "saved=#{path} (4 bytes)")
+    expect(File.binread(path)).to eq("PK!!")
+  end
+
+  it "lists exports newest first" do
+    expect(run("sites:exports", "s1")).to eq(0)
+    expect(out.string.lines.map { |l| l.split.first }).to eq(%w[demo-20261011T120000Z demo-20261010T090000Z])
+  end
+
+  it "requires --confirm-export to delete" do
+    expect(run("sites:delete", "s1")).to eq(1)
+    expect(err.string).to include("--confirm-export", "acms sites:exports s1")
+    expect(transport.requests).to be_empty
+  end
+
+  it "deletes only after the user types the slug" do
+    expect(run("sites:delete", "s1", "--confirm-export", "demo-20261011T120000Z", input: "nope\n")).to eq(1)
+    expect(err.string).to include("did not match")
+    expect(transport.requests.map(&:method)).not_to include(:delete)
+
+    expect(run("sites:delete", "s1", "--confirm-export", "demo-20261011T120000Z", input: "demo\n")).to eq(0)
+    expect(out.string).to include("Deleted site demo (s1)")
+    expect(transport.requests.last.query).to eq(confirm_export: "demo-20261011T120000Z")
+  end
+
+  it "skips the prompt with --yes and reports the server's refusal" do
+    transport = FakeTransport.new([ :delete, "/api/v1/sites/s1" ] => [ 422, { "error" => "Export the site first: acms sites:export s1, then delete with --confirm-export <name>" } ])
+    code = described_class.run([ "sites:delete", "s1", "--confirm-export", "x", "--yes", "--key", key ], out: out, err: err, input: StringIO.new, transport: transport)
+    expect(code).to eq(1)
+    expect(err.string).to include("Export the site first: acms sites:export s1")
+  end
+end
