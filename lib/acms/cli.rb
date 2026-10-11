@@ -6,6 +6,7 @@ module Acms
   # acms contentful dump   --file space.json
   # acms contentful import --site SITE [--file space.json]
   # acms contentful verify --site SITE [--file space.json]
+  # acms sites:export SITE [-o FILE] / sites:exports SITE / sites:delete SITE --confirm-export NAME [--yes]
   #
   # ACMS: --api-url / ACMS_API_URL, --key / ACMS_PRIVATE_KEY.
   # Contentful: CONTENTFUL_SPACE_ID, CONTENTFUL_ACCESS_TOKEN, CONTENTFUL_API_URL,
@@ -19,6 +20,11 @@ module Acms
         acms contentful dump   --file F       pull a Contentful space into a JSON file
         acms contentful import --site S       import a Contentful space (API or --file) into site S
         acms contentful verify --site S       diff a Contentful space against site S's delivery API
+        acms sites:export SITE [-o FILE]      export site SITE, wait, print its name and download URL
+        acms sites:exports SITE               list SITE's exports, newest first
+        acms sites:delete SITE --confirm-export NAME
+                                              delete SITE for good; NAME is its newest export's name.
+                                              Asks you to type the site slug unless --yes
 
       Options:
         --api-url URL        ACMS API base URL (ACMS_API_URL, default #{Client::DEFAULT_URL})
@@ -29,18 +35,26 @@ module Acms
         --token TOKEN        Contentful delivery token (CONTENTFUL_ACCESS_TOKEN)
         --contentful-url H   Contentful host (CONTENTFUL_API_URL, default cdn.contentful.com)
         --environment ENV    Contentful environment (CONTENTFUL_ENVIRONMENT, default master)
+        -o, --output FILE    where sites:export saves the ZIP
+        --confirm-export N   the newest export's name, required by sites:delete
+        --yes                sites:delete without the slug prompt
     TEXT
 
-    def self.run(argv, out: $stdout, err: $stderr)
-      new(out, err).run(argv.dup)
+    EXPORT_POLL_SECONDS = 2
+    EXPORT_POLL_LIMIT = 300
+
+    def self.run(argv, out: $stdout, err: $stderr, input: $stdin, transport: nil)
+      new(out, err, input, transport).run(argv.dup)
     rescue Acms::Error, OptionParser::ParseError, ArgumentError => e
       err.puts "acms: #{e.message}"
       1
     end
 
-    def initialize(out, err)
+    def initialize(out, err, input = $stdin, transport = nil)
       @out = out
       @err = err
+      @in = input
+      @transport = transport
     end
 
     def run(argv)
@@ -51,6 +65,9 @@ module Acms
       in [ "contentful", "dump" ] then contentful_dump(options)
       in [ "contentful", "import" ] then contentful_import(options)
       in [ "contentful", "verify" ] then contentful_verify(options)
+      in [ "sites:export", site_id ] then sites_export(site_id, options)
+      in [ "sites:exports", site_id ] then sites_exports(site_id, options)
+      in [ "sites:delete", site_id ] then sites_delete(site_id, options)
       else
         @err.puts USAGE
         1
@@ -74,6 +91,9 @@ module Acms
         o.on("--token TOKEN") { |v| options[:token] = v }
         o.on("--contentful-url HOST") { |v| options[:contentful_url] = v }
         o.on("--environment ENV") { |v| options[:environment] = v }
+        o.on("-o", "--output FILE") { |v| options[:output] = v }
+        o.on("--confirm-export NAME") { |v| options[:confirm_export] = v }
+        o.on("--yes") { options[:yes] = true }
         o.on("-h", "--help") { @out.puts USAGE; exit 0 }
       end.parse!(argv)
       options
@@ -119,6 +139,45 @@ module Acms
       result.ok? ? 0 : 2
     end
 
+    def sites_export(site_id, options)
+      client = client(options)
+      export = client.export_site(site_id)
+      EXPORT_POLL_LIMIT.times do
+        break if %w[completed failed].include?(export["status"])
+
+        sleep EXPORT_POLL_SECONDS
+        export = client.site_export(site_id, export["id"])
+      end
+      raise Error, "Export #{export['name']} is #{export['status']}: #{export['error_message']}" unless export["status"] == "completed"
+
+      @out.puts "name=#{export['name']}", "download_url=#{export['download_url']}"
+      if options[:output]
+        File.binwrite(options[:output], data = client.download(export["download_url"]))
+        @out.puts "saved=#{options[:output]} (#{data.bytesize} bytes)"
+      end
+      0
+    end
+
+    def sites_exports(site_id, options)
+      client(options).site_exports(site_id).each do |e|
+        @out.puts [ e["name"], e["status"], e["byte_size"] || "-", e["created_at"], e["download_url"] ].join("  ")
+      end
+      0
+    end
+
+    def sites_delete(site_id, options)
+      name = options[:confirm_export] or raise ArgumentError, "--confirm-export NAME is required: the newest export's name (acms sites:exports #{site_id})"
+      client = client(options)
+      unless options[:yes]
+        site = client.site(site_id)
+        @err.print "This deletes site #{site['name']} (#{site_id}) and its exports for good. Type its slug (#{site['slug']}) to go on: "
+        raise Error, "Not deleted: the slug did not match" unless @in.gets.to_s.strip == site["slug"]
+      end
+      result = client.delete_site(site_id, confirm_export: name)
+      @out.puts "Deleted site #{result['slug']} (#{result['id']})"
+      0
+    end
+
     def contentful_data(options)
       options[:file] ? JSON.parse(File.read(options[:file])) : fetch(options)
     end
@@ -133,7 +192,7 @@ module Acms
     def client(options)
       raise ArgumentError, "an ACMS private key is required (--key or ACMS_PRIVATE_KEY); `acms wallet new` makes one" if options[:key].to_s.empty?
 
-      Client.new(wallet: Wallet.new(options[:key]), base_url: options[:api_url])
+      Client.new(wallet: Wallet.new(options[:key]), base_url: options[:api_url], transport: @transport)
     end
   end
 end

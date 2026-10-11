@@ -30,6 +30,41 @@ module Acms
       patch("/api/v1/sites/#{site_id}", site: attrs)["site"]
     end
 
+    # ---- export and delete -------------------------------------------------
+
+    # Queues an export; poll #site_export until its status is completed or failed.
+    def export_site(site_id)
+      post("/api/v1/sites/#{site_id}/exports")["export"]
+    end
+
+    def site_export(site_id, id)
+      get("/api/v1/sites/#{site_id}/exports/#{id}")["export"]
+    end
+
+    # Newest first.
+    def site_exports(site_id)
+      get("/api/v1/sites/#{site_id}/exports")["exports"]
+    end
+
+    # The server refuses (422) unless confirm_export is the name of the site's
+    # newest export, made in the last 24 hours and after the last content change.
+    def delete_site(site_id, confirm_export:)
+      delete("/api/v1/sites/#{site_id}", confirm_export: confirm_export)
+    end
+
+    # GETs an absolute URL (an export's download_url) without the wallet
+    # header, following redirects to the storage host.
+    def download(url, redirects: 5)
+      response = @transport.call(:get, url, headers: {})
+      location = Array(response.headers["location"]).first
+      if location && (300..399).cover?(response.status) && redirects.positive?
+        return download(URI.join(url, location).to_s, redirects: redirects - 1)
+      end
+      raise Error.new("GET #{url}: HTTP #{response.status}", status: response.status, body: response.body) unless response.success?
+
+      response.body
+    end
+
     # ---- entry types -------------------------------------------------------
 
     def entry_types(site_id)
@@ -90,8 +125,8 @@ module Acms
       request(:patch, path, body: JSON.generate(body), content_type: "application/json")
     end
 
-    def delete(path)
-      request(:delete, path)
+    def delete(path, query = {})
+      request(:delete, path, query: query)
     end
 
     def upload(path, file:, filename:, fields: {}, content_type: nil)

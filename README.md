@@ -22,6 +22,11 @@ site   = client.site(site_id)
 client.create_entry(site_id, title: "Hello", entry_type_id: type_id, data: { body: "# Hi" }, published: true)
 client.create_asset(site_id, file: File.binread("logo.png"), filename: "logo.png", content_type: "image/png")
 client.leave_site(site_id)                # give up the wallet's own membership
+
+export = client.export_site(site_id)      # queued; poll client.site_export(site_id, export["id"])
+client.site_exports(site_id)              # newest first: name, status, byte_size, download_url
+client.download(export["download_url"])   # the ZIP bytes (follows the storage redirect)
+client.delete_site(site_id, confirm_export: export["name"])
 ```
 
 Every request is signed with a fresh five-minute token; nothing is stored.
@@ -35,6 +40,10 @@ acms invite redeem CODE               accept an invite with your key
 acms contentful dump   --file F       pull a Contentful space into a JSON file
 acms contentful import --site S       import a Contentful space (API or --file) into site S
 acms contentful verify --site S       diff a Contentful space against site S's delivery API
+acms sites:export SITE [-o FILE]      export site SITE, wait, print its name and download URL
+acms sites:exports SITE               list SITE's exports, newest first
+acms sites:delete SITE --confirm-export NAME [--yes]
+                                      delete SITE for good (asks for the slug unless --yes)
 ```
 
 The ACMS key comes from `--key` or `ACMS_PRIVATE_KEY`; the API host from
@@ -55,6 +64,19 @@ acms contentful verify --site <site id> --file space.json
 
 Then point the site at its Contentful-compatible endpoint: `GET /api/v1/sites/:id`
 returns `contentful.api_url`, `space_id` and `access_token` for any Contentful SDK.
+
+## Deleting a site
+
+A delete needs a fresh export first. The server refuses it (422) unless
+`--confirm-export` is the name of the site's newest export, that export is
+complete, under 24 hours old, and no older than the last content change, and
+the site has no domains. Only an owner or admin wallet may delete. The delete
+removes the site's exports too, so save the ZIP:
+
+```
+acms sites:export <site id> -o site.zip           # prints name=<slug>-<UTC timestamp>
+acms sites:delete <site id> --confirm-export <name>
+```
 
 ## What the importer maps
 
