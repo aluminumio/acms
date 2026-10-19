@@ -72,3 +72,49 @@ RSpec.describe Acms::CLI, "sites commands" do
     expect(err.string).to include("Export the site first: acms sites:export s1")
   end
 end
+
+RSpec.describe Acms::CLI, "connect:approve" do
+  let(:key) { Acms::Wallet.generate.private_key }
+  let(:out) { StringIO.new }
+  let(:err) { StringIO.new }
+  let(:pending) { { "user_code" => "QXRT-KMPB", "client_name" => "Enable", "scopes" => [ "analytics:read" ], "status" => "pending" } }
+  let(:transport) do
+    FakeTransport.new(
+      [ :get, "/api/v1/device_approvals/QXRT-KMPB" ] => [ 200, { "device_authorization" => pending } ],
+      [ :post, "/api/v1/device_approvals" ] => [ 200, { "device_authorization" => pending.merge("status" => "approved", "site_id" => "s1", "grant_id" => "g1") } ]
+    )
+  end
+
+  def run(*argv, input: "")
+    described_class.run([ *argv, "--key", key ], out: out, err: err, input: StringIO.new(input), transport: transport)
+  end
+
+  it "shows the client and scopes, and approves only after a yes" do
+    expect(run("connect:approve", "QXRT-KMPB", "--site", "s1", input: "n\n")).to eq(1)
+    expect(err.string).to include("Enable", "analytics:read", "s1")
+    expect(transport.requests.map(&:method)).not_to include(:post)
+
+    expect(run("connect:approve", "QXRT-KMPB", "--site", "s1", input: "y\n")).to eq(0)
+    expect(JSON.parse(transport.requests.last.body)).to eq("user_code" => "QXRT-KMPB", "site_id" => "s1", "decision" => "approve")
+    expect(out.string).to include("approved", "grant g1")
+  end
+
+  it "approves without asking with --yes, and denies with --deny" do
+    expect(run("connect:approve", "QXRT-KMPB", "--site", "s1", "--yes")).to eq(0)
+    expect(run("connect:approve", "QXRT-KMPB", "--site", "s1", "--deny", "--yes")).to eq(0)
+    expect(JSON.parse(transport.requests.last.body)).to include("decision" => "deny")
+  end
+
+  it "requires --site" do
+    expect(run("connect:approve", "QXRT-KMPB")).to eq(1)
+    expect(err.string).to include("--site")
+    expect(transport.requests).to be_empty
+  end
+
+  it "shows ACM's refusal" do
+    transport = FakeTransport.new([ :post, "/api/v1/device_approvals" ] => [ 403, { "error" => "Only an owner or admin of the site's organization can decide." } ])
+    code = described_class.run([ "connect:approve", "QXRT-KMPB", "--site", "s1", "--yes", "--key", key ], out: out, err: err, input: StringIO.new, transport: transport)
+    expect(code).to eq(1)
+    expect(err.string).to include("owner or admin")
+  end
+end

@@ -31,6 +31,15 @@ RSpec.describe Acms::Client do
     expect(transport.requests.map { |r| [ r.method, r.path ] }).to eq([ [ :post, "/api/v1/invites/CODE/redeem" ], [ :delete, "/api/v1/sites/s1/membership" ] ])
   end
 
+  it "maps device approval endpoints" do
+    client.device_approval("QXRT-KMPB")
+    client.decide_device_approval("QXRT-KMPB", site_id: "s1", approve: false)
+    expect(transport.requests.map { |r| [ r.method, r.path ] }).to eq([
+      [ :get, "/api/v1/device_approvals/QXRT-KMPB" ], [ :post, "/api/v1/device_approvals" ]
+    ])
+    expect(JSON.parse(transport.requests.last.body)).to eq("user_code" => "QXRT-KMPB", "site_id" => "s1", "decision" => "deny")
+  end
+
   it "maps site export and delete endpoints" do
     client.export_site("s1")
     client.site_exports("s1")
