@@ -44,6 +44,8 @@ acms sites:export SITE [-o FILE]      export site SITE, wait, print its name and
 acms sites:exports SITE               list SITE's exports, newest first
 acms sites:delete SITE --confirm-export NAME [--yes]
                                       delete SITE for good (asks for the slug unless --yes)
+acms connect:approve CODE --site SITE [--deny] [--yes]
+                                      approve or deny a client's device code for SITE
 ```
 
 The ACMS key comes from `--key` or `ACMS_PRIVATE_KEY`; the API host from
@@ -64,6 +66,20 @@ acms contentful verify --site <site id> --file space.json
 
 Then point the site at its Contentful-compatible endpoint: `GET /api/v1/sites/:id`
 returns `contentful.api_url`, `space_id` and `access_token` for any Contentful SDK.
+
+## Approving a client
+
+A product that reads a site (Enable, for one) asks ACM for a device code
+(RFC 8628) and shows it, for example `QXRT-KMPB`. An owner or admin of the
+site's organization approves it in the browser at `/connect`, or with an
+owner/admin wallet:
+
+```
+acms connect:approve QXRT-KMPB --site <site id>          # shows the client and scopes, asks y/N
+acms connect:approve QXRT-KMPB --site <site id> --deny
+```
+
+The client's wallet then reads only the approved scopes of that one site.
 
 ## Deleting a site
 

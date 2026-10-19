@@ -7,6 +7,7 @@ module Acms
   # acms contentful import --site SITE [--file space.json]
   # acms contentful verify --site SITE [--file space.json]
   # acms sites:export SITE [-o FILE] / sites:exports SITE / sites:delete SITE --confirm-export NAME [--yes]
+  # acms connect:approve USER_CODE --site SITE [--deny] [--yes]
   #
   # ACMS: --api-url / ACMS_API_URL, --key / ACMS_PRIVATE_KEY.
   # Contentful: CONTENTFUL_SPACE_ID, CONTENTFUL_ACCESS_TOKEN, CONTENTFUL_API_URL,
@@ -25,6 +26,9 @@ module Acms
         acms sites:delete SITE --confirm-export NAME
                                               delete SITE for good; NAME is its newest export's name.
                                               Asks you to type the site slug unless --yes
+        acms connect:approve CODE --site S [--deny]
+                                              approve (or deny) a client's device code for site S
+                                              as an owner/admin wallet. Asks unless --yes
 
       Options:
         --api-url URL        ACMS API base URL (ACMS_API_URL, default #{Client::DEFAULT_URL})
@@ -37,7 +41,8 @@ module Acms
         --environment ENV    Contentful environment (CONTENTFUL_ENVIRONMENT, default master)
         -o, --output FILE    where sites:export saves the ZIP
         --confirm-export N   the newest export's name, required by sites:delete
-        --yes                sites:delete without the slug prompt
+        --deny               connect:approve denies the code instead
+        --yes                sites:delete or connect:approve without the prompt
     TEXT
 
     EXPORT_POLL_SECONDS = 2
@@ -68,6 +73,7 @@ module Acms
       in [ "sites:export", site_id ] then sites_export(site_id, options)
       in [ "sites:exports", site_id ] then sites_exports(site_id, options)
       in [ "sites:delete", site_id ] then sites_delete(site_id, options)
+      in [ "connect:approve", user_code ] then connect_approve(user_code, options)
       else
         @err.puts USAGE
         1
@@ -93,6 +99,7 @@ module Acms
         o.on("--environment ENV") { |v| options[:environment] = v }
         o.on("-o", "--output FILE") { |v| options[:output] = v }
         o.on("--confirm-export NAME") { |v| options[:confirm_export] = v }
+        o.on("--deny") { options[:deny] = true }
         o.on("--yes") { options[:yes] = true }
         o.on("-h", "--help") { @out.puts USAGE; exit 0 }
       end.parse!(argv)
@@ -175,6 +182,20 @@ module Acms
       end
       result = client.delete_site(site_id, confirm_export: name)
       @out.puts "Deleted site #{result['slug']} (#{result['id']})"
+      0
+    end
+
+    def connect_approve(user_code, options)
+      site_id = options[:site] or raise ArgumentError, "--site is required: the site the client may read"
+      verb = options[:deny] ? "Deny" : "Approve"
+      client = client(options)
+      unless options[:yes]
+        request = client.device_approval(user_code)
+        @err.print "#{verb} #{request['client_name']} (#{request['scopes'].join(', ')}) on site #{site_id}, code #{request['user_code']}? [y/N] "
+        raise Error, "Nothing decided" unless @in.gets.to_s.strip.casecmp?("y")
+      end
+      result = client.decide_device_approval(user_code, site_id: site_id, approve: !options[:deny])
+      @out.puts "#{result['client_name']}: #{result['status']}#{" (site #{result['site_id']}, grant #{result['grant_id']})" if result['grant_id']}"
       0
     end
 

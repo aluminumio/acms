@@ -30,6 +30,20 @@ module Acms
       patch("/api/v1/sites/#{site_id}", site: attrs)["site"]
     end
 
+    # ---- device approvals (site grants) -------------------------------------
+
+    # A client's RFC 8628 device code: client_name, scopes, status. The wallet decides it
+    # only as an owner or admin of the site's organization; approve grants the client's
+    # wallet the scopes on that one site.
+    def device_approval(user_code)
+      get("/api/v1/device_approvals/#{user_code}")["device_authorization"]
+    end
+
+    def decide_device_approval(user_code, site_id:, approve: true)
+      post("/api/v1/device_approvals", user_code: user_code, site_id: site_id,
+                                       decision: approve ? "approve" : "deny")["device_authorization"]
+    end
+
     # ---- export and delete -------------------------------------------------
 
     # Queues an export; poll #site_export until its status is completed or failed.
